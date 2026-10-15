@@ -1,0 +1,18 @@
+{
+  "name": "clap-class-as-processor",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Clap: Everything is a Class",
+  "type": "commonjs",
+  "main": "src/clap.cjs",
+  "bin": {
+    "clap": "bin/clap.cjs"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.cjs",
+    "start": "node bin/clap.cjs examples/hello.clap"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

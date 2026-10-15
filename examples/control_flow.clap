@@ -1,0 +1,16 @@
+// Syntax subclasses receive expressions without evaluating them first.
+Let(i, 0)
+While(i Less 5, {
+    Set(i, i Add 1)
+    If(i Equal 2, { Continue() })
+    If(i Equal 4, { Break() })
+    Print(i)
+})
+
+class Unless : Syntax {
+    process(condition, body) {
+        If(Not(condition.eval()), body)
+    }
+}
+
+Unless(false, { Print("unless executed") })

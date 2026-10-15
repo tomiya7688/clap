@@ -277,7 +277,11 @@ class Parser {
   primary() {
     if (this.has("number")) {
       const raw = this.expect("number").text;
-      return { kind: "literal", type: raw.includes(".") ? "Float" : "Int", value: Number(raw) };
+      const number = Number(raw);
+      if (!Number.isFinite(number) || (!raw.includes(".") && !Number.isSafeInteger(number))) {
+        throw new ClapError("数値リテラルが範囲外です: " + raw);
+      }
+      return { kind: "literal", type: raw.includes(".") ? "Float" : "Int", value: number };
     }
     if (this.has("string")) return { kind: "literal", type: "String", value: this.expect("string").text };
     if (this.has("identifier")) {

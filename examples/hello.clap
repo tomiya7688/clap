@@ -1,0 +1,16 @@
+// Clap: Everything is a Class
+class Double : Function {
+    process(x) {
+        Return(x Mul 2)
+    }
+}
+
+Print("Hello, " Add "Clap!")
+Print(Double(21))
+
+class Game {
+    class Player {
+        class HP {}
+    }
+}
+Print(Game.Player.HP)

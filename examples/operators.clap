@@ -1,0 +1,11 @@
+// Operators are classes and are written by name instead of symbols.
+class Fuse : Operator {
+    precedence = 25
+
+    process(left, right) {
+        Return((left Mul 10) Add right)
+    }
+}
+
+Print(1 Add 2 Fuse 3) // 24
+Print(2 Pow 3 Pow 2)  // 512 (right associative)
