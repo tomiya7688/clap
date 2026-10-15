@@ -517,7 +517,7 @@ class Interpreter {
     });
     this.syntax("Return", (nodes, scope, vm) => {
       if (nodes.length > 1) throw new ClapError("Return: 引数は 0 または 1 個です");
-      throw new ReturnSignal(nodes.length ? vm.evaluateLazy(nodes[0], scope) : vm.unit);
+      throw new ReturnSignal(nodes.length ? vm.evaluate(nodes[0], scope) : vm.unit);
     });
     this.syntax("Break", (nodes, scope, vm) => {
       vm.arity(nodes, 0, "Break");
