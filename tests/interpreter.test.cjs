@@ -129,7 +129,7 @@ test("Syntax may return unevaluated code and evaluate it later", () => {
     'Print("before")',
     "code.eval()"
   ].join("\n"));
-  assert.deepEqual(lines, ["<class Expression>", "before", "later"]);
+  assert.deepEqual(lines, ["<class Call>", "before", "later"]);
 });
 
 test("user-defined Operator classes register precedence dynamically", () => {

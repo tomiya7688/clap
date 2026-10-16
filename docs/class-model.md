@@ -12,6 +12,7 @@
 6. Function の呼び出し、Operator の中置演算、Syntax の遅延評価は処理系が各クラスに委譲する。
 7. 名前空間としてのクラスは、内部クラスを保持する。継承関係と内包関係は別。
 8. Variable と Scope もクラスであり、名前の解決は Variable の値を参照する。
+9. AST ノードはすべて Node の派生クラス。Syntax の引数は具体的な AST クラスであり、Expression.eval() で字句スコープに基づいて評価できる。
 
 ## 自己参照と継承
 
@@ -27,7 +28,19 @@ Class ── parent ──> Class
   ├── Syntax
   │    └── If
   ├── Scope
-  └── Variable
+  ├── Variable
+  └── Node
+       ├── Expression
+       │    ├── Literal
+       │    ├── Reference
+       │    ├── Call
+       │    │    └── OperatorCall
+       │    ├── MemberAccess
+       │    └── Block
+       └── Statement
+            ├── ClassDefinition
+            ├── FieldDefinition
+            └── MethodDefinition
 ~~~
 
 Class の自己参照を含め、親チェーン探索には循環検知を使う。
@@ -46,7 +59,10 @@ Class の自己参照を含め、親チェーン探索には循環検知を使�
 
 - Function: 実引数を評価してから process に渡す。
 - Operator: 優先順位などの属性をパーサーに提供し、通常は評価済み左右値を process に渡す。
-- Syntax: 未評価の式を保持した Expression クラスを process に渡せる。
+- Syntax: 未評価の式を保持した具体的な Expression 派生クラスを process に渡せる。
+- Quote: 式を AST クラス値に変換してその場では評価しない。
+- Parse: 文字列の単一式を AST クラス値へ変換する。
+- Array: AST の引数・文のリストなどを Clap クラスとして保持する。
 - Scope: 名前から Variable 束縛を引き、変数の値クラスを解決する。
 
-ブートストラップ実装はあくまで出発点。今後 AST/Parser を言語側クラスへ公開していく。
+ブートストラップ実装はあくまで出発点。AST ノードはクラス化できたが、トークナイザーとパーサー本体、内部メタデータはまだ JavaScript 実装。次に AST の書き換え・Parser の公開を進める。

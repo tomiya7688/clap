@@ -12,10 +12,11 @@
 - 演算子の標準記号は使わず、`1 Add 2` のようにクラス名で書く。
 - クラスはクラスの内部に定義できる。
 - 変数の束縛・参照・スコープもクラスモデルに含める。
+- AST の各ノードも `Node` の派生クラス。コードを `Quote` / `Parse` でクラスとして取り扱える。
 
 ## はじめかた（試作インタプリタ）
 
-Node.js 18 以降で、外部依存なしで実行する予定です。
+Node.js 18 以降で、外部依存なしで実行できます。
 
 ```sh
 node bin/clap.cjs examples/hello.clap
@@ -34,6 +35,20 @@ Print(answer)
 ```
 
 Clap は設計・実装の初期段階です。現在の仕様と実装済み機能は [docs/language.md](docs/language.md) を参照してください。
+
+## コードもクラス
+
+```clap
+Let(ast, Quote(1 Add 2 Mul 3))
+Print(ClassOf(ast)) // <class OperatorCall>
+Print(ast.name)     // Add
+Print(ast.eval())   // 7
+
+Let(parsed, Parse("10 Mul 4"))
+Print(parsed.eval()) // 40
+```
+
+`ast.left` / `ast.right` / `ast.args` などから構文木を再帰的に調べられます。詳しくは [ASTの例](examples/ast.clap) を参照してください。
 
 ## ランタイム方針
 

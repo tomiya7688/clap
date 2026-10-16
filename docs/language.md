@@ -8,7 +8,7 @@ Clap = **Class as Processor**。Lisp のリスト中心の統一性に対して�
 
 - Clap から扱える値はすべてクラスオブジェクトである。
 - Class 自身もクラス（Class : Class）。
-- Int、Float、String、Bool、Function、Operator、Syntax、Variable、Reference、Scope、Expression などは標準クラス。
+- Int、Float、String、Bool、Array、Function、Operator、Syntax、Variable、Scope、Node、Expression などは標準クラス。
 - たとえば数値 10 は Int クラスを親に持つ値クラスで、ClassOf(10) は Int。
 - ClassOf(Class) は Class。
 - ClassOf(Double) は Function（Double が Function を継承している場合）。
@@ -85,7 +85,7 @@ While(i Less 3, {
 })
 ~~~
 
-ユーザー定義の Syntax の process には、未評価の式を表す Expression クラスが渡される。Expression.eval() で評価できる。
+ユーザー定義の Syntax の process には、未評価の式を表す具体的な AST クラス（Literal、Call、OperatorCall 等）が渡される。これらは Expression の派生クラスであり、.eval() を継承する。
 
 ~~~clap
 class Unless : Syntax {
@@ -107,7 +107,52 @@ Print("now")
 later.eval()
 ~~~
 
-## 6. クラス内クラス・変数・スコープ
+## 6. AST = Node 派生クラス
+
+構文解析の結果は JavaScript のプレーンな AST オブジェクトではなく、Clap の `Node` を継承したクラス値。
+
+~~~text
+Node
+├── Expression
+│   ├── Literal
+│   ├── Reference
+│   ├── Call
+│   │   └── OperatorCall
+│   ├── MemberAccess
+│   └── Block
+└── Statement
+    ├── ClassDefinition
+    ├── FieldDefinition
+    └── MethodDefinition
+~~~
+
+`Quote(expression)` は式を評価せず AST として返す Syntax クラス。`Parse(string)` は文字列の中の **単一の式** を解析して AST を返す Function クラス。
+
+~~~clap
+Let(code, Quote(1 Add 2 Mul 3))
+Print(ClassOf(code))  // <class OperatorCall>
+Print(code.kind)      // operator
+Print(code.name)      // Add
+Print(ClassOf(code.right)) // <class OperatorCall>
+Print(code.right.name) // Mul
+Print(code.eval())    // 7
+
+Let(parsed, Parse("10 Mul 4"))
+Print(parsed.eval()) // 40
+~~~
+
+AST のフィールドも Clap クラスで統一される。例えば `Literal.value` は Int や String、`Reference.name` は String、`Call.args` や `Block.body` は Array クラス。Array には `.length` と `.at(index)` がある。
+
+~~~clap
+Let(call, Quote(Print(10 Add 3)))
+Print(call.args.length)      // 1
+Print(ClassOf(call.args.at(0))) // <class OperatorCall>
+Print(call.args.at(0).left.eval()) // 10
+~~~
+
+Syntax の引数や Quote / Parse が返す AST は **字句スコープを捕捉**するため、ブロックの外でも `.eval()` で元のスコープの変数を参照できる。現時点では AST は読み取り専用として公開し、構文木の書き換えや任意の新しい字句規則は未実装。
+
+## 7. クラス内クラス・変数・スコープ
 
 ~~~clap
 class Game {
@@ -120,17 +165,17 @@ Print(Game.Player.HP)
 
 ネストに構文上の深さ制限はない。Let(name, value) は現在の Scope に Variable クラスの束縛を作り、Set(name, value) は見つかった束縛を更新する。波括弧のブロックは子スコープで実行する。
 
-## 7. 現段階の制約
+## 8. 現段階の制約
 
-- ホスト側は JavaScript (Node.js)。字句解析・AST 構築・class 宣言の起動処理には最小限の専用実装がある。外から観測できる Expression と Syntax はクラスだが、**内部 AST の全ノードはまだ JS オブジェクト**。
+- ホスト側は JavaScript (Node.js)。**AST の各ノードは ClapClass** だが、トークンやパーサー/評価器のブートストラップ処理、ノードの非公開メタデータは JS で実装される。字句解析と `class` 宣言の起動処理には専用規則が残る。
 - Syntax 派生クラスによる遅延評価は可能。ただし任意の新しい字句記号や構文規則を登録する機能は未実装。
 - 標準 Int は JavaScript の安全な整数範囲、Float は IEEE 754 倍精度を使う。大きな整数・任意精度数値は未対応。
 - 継承・メソッド・クラス内クラスは初期実装。インスタンス化、ミュータブルなクラスフィールド、パッケージ/モジュール、例外、非同期処理、最適化、完全な構文メタプログラミングは今後の課題。
 - Clap のコード自体はサンドボックスではない。信頼できないプログラムを安全に実行する用途には使わない。
 
-## 8. 次の目標
+## 9. 次の目標
 
-1. 内部 AST も公開可能な構文クラスとして再構成し、クラスプロセッサーの評価規約を明示する。
+1. AST の構築・変換 API を追加し、ユーザー定義の構文マクロを強化する。
 2. Class 宣言を Class / Syntax に近づけてパーサーの特例を減らす。
 3. メソッドの束縛・属性変更・型変換・モジュール機構の仕様を固める。
 4. インタプリタ自身を Clap で記述できる範囲を拡大する。

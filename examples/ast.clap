@@ -1,0 +1,24 @@
+// Clap's own source code is represented as classes.
+Let(code, Quote(1 Add 2 Mul 3))
+Print(ClassOf(code))
+Print(code.kind)
+Print(code.name)
+Print(code.left.value)
+Print(code.right.name)
+Print(code.eval())
+
+// A Syntax subclass can inspect an unevaluated AST and decide when to run it.
+class Inspect : Syntax {
+    process(expression) {
+        Print(ClassOf(expression))
+        Print(expression.kind)
+        Return(expression.eval())
+    }
+}
+
+Print(Inspect(4 Mul 5))
+
+// Parse a source string into an AST value without executing it.
+Let(parsed, Parse("10 Mul 4"))
+Print(ClassOf(parsed))
+Print(parsed.eval())
