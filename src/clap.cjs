@@ -154,11 +154,16 @@ function tokenize(source) {
 }
 
 class Parser {
-  constructor(tokens, operatorInfo) {
+  constructor(tokens, operatorInfo, makeNode) {
     this.tokens = tokens;
     this.index = 0;
     this.operatorInfo = operatorInfo;
+    if (typeof makeNode !== "function") {
+      throw new ClapError("Parser にはASTクラス生成関数が必要です");
+    }
+    this.makeNode = makeNode;
   }
+  node(kind, fields) { return this.makeNode(kind, fields); }
   current() { return this.tokens[this.index]; }
   peek(delta = 1) { return this.tokens[this.index + delta] || this.tokens[this.tokens.length - 1]; }
   has(kind, text = null) {
@@ -211,29 +216,29 @@ class Parser {
     if (inClass && this.has("identifier") && this.peek().text === "=") {
       const name = this.expect("identifier").text;
       this.expect("symbol", "=");
-      return { kind: "field", name, expression: this.expression() };
+      return this.node("field", { name, expression: this.expression() });
     }
     if (inClass && this.has("identifier") && this.peek().text === "(") {
       return this.method();
     }
     if (inClass) this.fail("クラス内にはフィールド、メソッド、内部クラスを記述してください");
-    return { kind: "statement", expression: this.expression() };
+    return this.node("statement", { expression: this.expression() });
   }
   classDeclaration() {
     this.expect("identifier", "class");
     const name = this.expect("identifier").text;
     let base = null;
     if (this.match("symbol", ":")) {
-      base = { kind: "name", name: this.expect("identifier").text };
+      base = this.node("name", { name: this.expect("identifier").text });
       while (this.match("symbol", ".")) {
-        base = { kind: "member", object: base, name: this.expect("identifier").text };
+        base = this.node("member", { object: base, name: this.expect("identifier").text });
       }
     }
     this.newlines();
     this.expect("symbol", "{");
     const body = this.statements(true);
     this.expect("symbol", "}");
-    return { kind: "class", name, base, body };
+    return this.node("class", { name, base, body });
   }
   method() {
     const name = this.expect("identifier").text;
@@ -253,13 +258,13 @@ class Parser {
     const body = this.statements(false);
     this.expect("symbol", "}");
     if (new Set(params).size !== params.length) this.fail("引数名が重複しています");
-    return { kind: "method", name, params, body };
+    return this.node("method", { name, params, body });
   }
   block() {
     this.expect("symbol", "{");
     const body = this.statements(false);
     this.expect("symbol", "}");
-    return { kind: "block", body };
+    return this.node("block", { body });
   }
   expression(minPrecedence = 0) {
     this.newlines();
@@ -270,7 +275,7 @@ class Parser {
       if (!spec || spec.precedence < minPrecedence) break;
       this.index++;
       const right = this.expression(spec.precedence + (spec.associativity === "right" ? 0 : 1));
-      left = { kind: "operator", name, left, right };
+      left = this.node("operator", { name, left, right });
     }
     return left;
   }
@@ -281,13 +286,13 @@ class Parser {
       if (!Number.isFinite(number) || (!raw.includes(".") && !Number.isSafeInteger(number))) {
         throw new ClapError("数値リテラルが範囲外です: " + raw);
       }
-      return { kind: "literal", type: raw.includes(".") ? "Float" : "Int", value: number };
+      return this.node("literal", { type: raw.includes(".") ? "Float" : "Int", value: number });
     }
-    if (this.has("string")) return { kind: "literal", type: "String", value: this.expect("string").text };
+    if (this.has("string")) return this.node("literal", { type: "String", value: this.expect("string").text });
     if (this.has("identifier")) {
       const name = this.expect("identifier").text;
-      if (name === "true" || name === "false") return { kind: "literal", type: "Bool", value: name === "true" };
-      return { kind: "name", name };
+      if (name === "true" || name === "false") return this.node("literal", { type: "Bool", value: name === "true" });
+      return this.node("name", { name });
     }
     if (this.match("symbol", "(")) {
       const inside = this.expression();
@@ -301,7 +306,7 @@ class Parser {
   postfix(left) {
     while (true) {
       if (this.match("symbol", ".")) {
-        left = { kind: "member", object: left, name: this.expect("identifier").text };
+        left = this.node("member", { object: left, name: this.expect("identifier").text });
         continue;
       }
       if (this.match("symbol", "(")) {
@@ -315,7 +320,7 @@ class Parser {
           } while (this.match("symbol", ","));
         }
         this.expect("symbol", ")");
-        left = { kind: "call", target: left, args };
+        left = this.node("call", { target: left, args });
         continue;
       }
       break;
@@ -331,13 +336,28 @@ class Interpreter {
     const Class = new ClapClass("Class");
     Class.parent = Class; // Bootstrap fixed point: Class : Class
     this.types.Class = Class;
+    // Runtime types and the user-visible AST hierarchy are all Clap classes.
     for (const name of [
-      "Int", "Float", "String", "Bool", "Unit", "Function", "Operator",
-      "Syntax", "Expression", "Literal", "Call", "Block", "Reference",
-      "Variable", "Scope"
+      "Int", "Float", "String", "Bool", "Unit", "Array", "Function",
+      "Operator", "Syntax", "Variable", "Scope"
     ]) {
       this.types[name] = new ClapClass(name, Class);
     }
+    const defineType = (name, parent) => {
+      this.types[name] = new ClapClass(name, this.types[parent]);
+    };
+    defineType("Node", "Class");
+    defineType("Expression", "Node");
+    defineType("Statement", "Node");
+    defineType("Literal", "Expression");
+    defineType("Reference", "Expression");
+    defineType("Call", "Expression");
+    defineType("OperatorCall", "Call");
+    defineType("MemberAccess", "Expression");
+    defineType("Block", "Expression");
+    defineType("ClassDefinition", "Statement");
+    defineType("FieldDefinition", "Statement");
+    defineType("MethodDefinition", "Statement");
     this.root = new ClapScope(this.types.Scope);
     for (const [name, klass] of Object.entries(this.types)) {
       this.root.define(name, klass, this.types.Variable);
@@ -346,6 +366,79 @@ class Interpreter {
     this.installStandardLibrary();
   }
 
+  // Host parser metadata lives privately in .data. Reflected fields are
+  // always ClapClass values, including lists and nested AST nodes.
+  astType(kind) {
+    const mapping = {
+      literal: "Literal", name: "Reference", member: "MemberAccess",
+      call: "Call", operator: "OperatorCall", block: "Block",
+      statement: "Statement", class: "ClassDefinition",
+      field: "FieldDefinition", method: "MethodDefinition"
+    };
+    if (!Object.hasOwn(mapping, kind)) throw new ClapError("不明なAST種別: " + kind);
+    return this.types[mapping[kind]];
+  }
+  array(items) {
+    const array = this.value("Array", null);
+    array.items = items;
+    array.members.set("length", this.value("Int", items.length));
+    return array;
+  }
+  reflectAstField(kind, key, value, scope = null, fields = null) {
+    if (value === null) return this.unit;
+    if (Array.isArray(value)) {
+      return this.array(value.map((item) => this.reflectAstField(kind, "", item, scope)));
+    }
+    if (value instanceof ClapClass) {
+      return scope && value.isA(this.types.Node) ? this.bindAst(value, scope) : value;
+    }
+    if (kind === "literal" && key === "type") return this.types[value];
+    if (kind === "literal" && key === "value") return this.value(fields.type, value);
+    if (typeof value === "string") return this.value("String", value);
+    if (typeof value === "boolean") return this.value("Bool", value);
+    if (typeof value === "number") return this.value(Number.isInteger(value) ? "Int" : "Float", value);
+    throw new ClapError("ASTフィールドの変換に失敗しました: " + key);
+  }
+  reflectAstFields(kind, fields, scope = null) {
+    const members = new Map();
+    members.set("kind", this.value("String", kind));
+    for (const [key, value] of Object.entries(fields)) {
+      members.set(key, this.reflectAstField(kind, key, value, scope, fields));
+    }
+    return members;
+  }
+  astNode(kind, data) {
+    const node = new ClapClass("<ast:" + kind + ">", this.astType(kind));
+    node.kind = kind;
+    node.data = data;
+    node.members = this.reflectAstFields(kind, data);
+    return node;
+  }
+  bindAst(ast, scope) {
+    if (!(ast instanceof ClapClass) || !ast.isA(this.types.Node) || !ast.data) {
+      throw new ClapError("ASTクラスが必要です");
+    }
+    const node = new ClapClass(ast.name, ast.parent);
+    node.kind = ast.kind;
+    node.data = ast.data;
+    node.ast = ast.ast || ast;
+    node.lexicalScope = scope;
+    node.members = this.reflectAstFields(node.kind, node.data, scope);
+    return node;
+  }
+  createParser(source) {
+    return new Parser(tokenize(source), (name) => this.operatorInfo(name),
+      (kind, fields) => this.astNode(kind, fields));
+  }
+  parseExpression(source, scope = this.root) {
+    const parser = this.createParser(source);
+    const statement = parser.next();
+    if (!statement || statement.kind !== "statement") {
+      throw new ClapError("Parse には式が必要です");
+    }
+    if (parser.next() !== null) throw new ClapError("Parse は単一の式だけを受け取ります");
+    return this.bindAst(statement.data.expression, scope);
+  }
   value(type, raw) {
     if (!this.types[type]) throw new ClapError("未定義の標準型: " + type);
     const object = new ClapClass("<" + type + ">", this.types[type]);
@@ -443,8 +536,16 @@ class Interpreter {
     });
     this.nativeMethod(this.types.Expression, "eval", (args, vm, self) => {
       vm.arity(args, 0, "Expression.eval");
-      if (!self.ast) throw new ClapError("評価する式がありません");
+      if (!self.ast || !self.lexicalScope) throw new ClapError("評価する式がありません");
       return vm.evaluate(self.ast, self.lexicalScope);
+    });
+    this.nativeMethod(this.types.Array, "at", (args, vm, self) => {
+      vm.arity(args, 1, "Array.at");
+      vm.requireType(self, "Array");
+      vm.requireType(args[0], "Int");
+      const i = args[0].value;
+      if (i < 0 || i >= self.items.length) throw new ClapError("Array.at: 添字が範囲外です");
+      return self.items[i];
     });
     this.nativeMethod(this.types.Class, "equal", (args, vm, self) => {
       vm.arity(args, 1, "equal");
@@ -478,6 +579,11 @@ class Interpreter {
       return vm.unit;
     });
     this.register("Print", print);
+    this.register("Parse", this.nativeFunction("Parse", (args, vm, self, scope) => {
+      vm.arity(args, 1, "Parse");
+      vm.requireType(args[0], "String");
+      return vm.parseExpression(args[0].value, scope);
+    }));
     this.register("Not", this.nativeFunction("Not", (args, vm) => {
       vm.arity(args, 1, "Not");
       return vm.value("Bool", !vm.bool(args[0]));
@@ -491,15 +597,19 @@ class Interpreter {
       return vm.value("Bool", args[0].isA(args[1]));
     }));
 
+    this.syntax("Quote", (nodes, scope, vm) => {
+      vm.arity(nodes, 1, "Quote");
+      return vm.bindAst(nodes[0], scope);
+    });
     this.syntax("Let", (nodes, scope, vm) => {
       vm.arity(nodes, 2, "Let");
       if (nodes[0].kind !== "name") throw new ClapError("Let の第一引数は名前です");
-      return scope.define(nodes[0].name, vm.evaluate(nodes[1], scope), vm.types.Variable);
+      return scope.define(nodes[0].data.name, vm.evaluate(nodes[1], scope), vm.types.Variable);
     });
     this.syntax("Set", (nodes, scope, vm) => {
       vm.arity(nodes, 2, "Set");
       if (nodes[0].kind !== "name") throw new ClapError("Set の第一引数は名前です");
-      return scope.assign(nodes[0].name, vm.evaluate(nodes[1], scope));
+      return scope.assign(nodes[0].data.name, vm.evaluate(nodes[1], scope));
     });
     this.syntax("If", (nodes, scope, vm) => {
       if (nodes.length !== 2 && nodes.length !== 3) throw new ClapError("If: 引数は 2 または 3 個です");
@@ -547,10 +657,10 @@ class Interpreter {
     return { precedence, associativity: assoc && assoc.value === "right" ? "right" : "left" };
   }
   wrapExpression(ast, scope) {
-    const wrapper = new ClapClass("<expression>", this.types.Expression);
-    wrapper.ast = ast;
-    wrapper.lexicalScope = scope;
-    return wrapper;
+    if (!(ast instanceof ClapClass) || !ast.isA(this.types.Expression)) {
+      throw new ClapError("Expression クラスが必要です");
+    }
+    return this.bindAst(ast, scope);
   }
   evaluateLazy(ast, scope) {
     const result = this.evaluate(ast, scope);
@@ -589,52 +699,55 @@ class Interpreter {
     return this.callFunction(callable, args, scope, self);
   }
   evaluate(node, scope) {
+    this.requireType(node, "Expression");
+    const data = node.data;
     switch (node.kind) {
-      case "literal": return this.value(node.type, node.value);
-      case "name": return scope.read(node.name);
+      case "literal": return this.value(data.type, data.value);
+      case "name": return scope.read(data.name);
       case "member": {
-        const object = this.evaluate(node.object, scope);
-        const member = object.getMember(node.name);
-        if (member === undefined) throw new ClapError(object.name + " に " + node.name + " はありません");
+        const object = this.evaluate(data.object, scope);
+        const member = object.getMember(data.name);
+        if (member === undefined) throw new ClapError(object.name + " に " + data.name + " はありません");
         return member;
       }
       case "call": {
-        if (node.target.kind === "member") {
-          const self = this.evaluate(node.target.object, scope);
-          const method = self.getMember(node.target.name);
-          if (method === undefined) throw new ClapError(self.name + " に " + node.target.name + " はありません");
-          return this.invoke(method, node.args, scope, self);
+        if (data.target.kind === "member") {
+          const self = this.evaluate(data.target.data.object, scope);
+          const method = self.getMember(data.target.data.name);
+          if (method === undefined) throw new ClapError(self.name + " に " + data.target.data.name + " はありません");
+          return this.invoke(method, data.args, scope, self);
         }
-        return this.invoke(this.evaluate(node.target, scope), node.args, scope);
+        return this.invoke(this.evaluate(data.target, scope), data.args, scope);
       }
       case "operator": {
-        const klass = scope.read(node.name);
-        if (!klass.isA(this.types.Operator)) throw new ClapError("演算子ではありません: " + node.name);
-        return this.invoke(klass, [node.left, node.right], scope);
+        const klass = scope.read(data.name);
+        if (!klass.isA(this.types.Operator)) throw new ClapError("演算子ではありません: " + data.name);
+        return this.invoke(klass, [data.left, data.right], scope);
       }
-      case "block": return this.executeBody(node.body, new ClapScope(this.types.Scope, scope));
+      case "block": return this.executeBody(data.body, new ClapScope(this.types.Scope, scope));
       default: throw new ClapError("未対応のAST: " + node.kind);
     }
   }
   classDeclaration(node, scope, owner = null) {
-    const base = node.base ? this.evaluate(node.base, scope) : this.types.Class;
+    const definition = node.data;
+    const base = definition.base ? this.evaluate(definition.base, scope) : this.types.Class;
     if (!(base instanceof ClapClass)) throw new ClapError("継承元がクラスではありません");
-    const klass = new ClapClass(owner ? owner.name + "." + node.name : node.name, base);
-    if (owner) owner.members.set(node.name, klass);
-    else scope.define(node.name, klass, this.types.Variable);
+    const klass = new ClapClass(owner ? owner.name + "." + definition.name : definition.name, base);
+    if (owner) owner.members.set(definition.name, klass);
+    else scope.define(definition.name, klass, this.types.Variable);
     const classScope = new ClapScope(this.types.Scope, scope);
-    classScope.define(node.name, klass, this.types.Variable);
-    for (const member of node.body) {
+    classScope.define(definition.name, klass, this.types.Variable);
+    for (const member of definition.body) {
       if (member.kind === "class") {
         this.classDeclaration(member, classScope, klass);
       } else if (member.kind === "field") {
-        klass.members.set(member.name, this.evaluate(member.expression, classScope));
+        klass.members.set(member.data.name, this.evaluate(member.data.expression, classScope));
       } else if (member.kind === "method") {
-        const fn = new ClapClass(klass.name + "." + member.name, this.types.Function);
-        fn.params = member.params;
-        fn.body = member.body;
+        const fn = new ClapClass(klass.name + "." + member.data.name, this.types.Function);
+        fn.params = member.data.params;
+        fn.body = member.data.body;
         fn.closure = classScope;
-        klass.members.set(member.name, fn);
+        klass.members.set(member.data.name, fn);
       } else {
         throw new ClapError("クラス要素が不正です: " + member.kind);
       }
@@ -648,11 +761,11 @@ class Interpreter {
   }
   executeStatement(statement, scope) {
     if (statement.kind === "class") return this.classDeclaration(statement, scope);
-    if (statement.kind === "statement") return this.evaluate(statement.expression, scope);
+    if (statement.kind === "statement") return this.evaluate(statement.data.expression, scope);
     throw new ClapError("実行できない文です: " + statement.kind);
   }
   run(source) {
-    const parser = new Parser(tokenize(source), (name) => this.operatorInfo(name));
+    const parser = this.createParser(source);
     let result = this.unit;
     while (true) {
       const statement = parser.next();
