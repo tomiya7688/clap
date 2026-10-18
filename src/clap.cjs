@@ -426,6 +426,96 @@ class Interpreter {
     node.members = this.reflectAstFields(node.kind, node.data, scope);
     return node;
   }
+  // Public AST API: every input and output is a Clap class, not a host object.
+  constructAst(kind, data, scope) {
+    return this.bindAst(this.astNode(kind, data), scope);
+  }
+  astIdentifier(value, context = "name") {
+    this.requireType(value, "String");
+    const str = value.value;
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(str) || str === "true" || str === "false") {
+      throw new ClapError(context + " が不正です: " + str);
+    }
+    return str;
+  }
+  astExpression(node) {
+    this.requireType(node, "Expression");
+    if (!node.data) throw new ClapError("AST値が必要です");
+    return node;
+  }
+  astStatement(node) {
+    this.requireType(node, "Statement");
+    if (!node.data || !["statement", "class"].includes(node.kind)) {
+      throw new ClapError("実行可能なStatementが必要です");
+    }
+    return node;
+  }
+  astList(value, context, convert) {
+    this.requireType(value, "Array");
+    if (!Array.isArray(value.items)) throw new ClapError("Array値が必要です");
+    return value.items.map((v) => convert(v, context));
+  }
+  astField(kind, key, value, fields) {
+    const ident = (v) => this.astIdentifier(v, key);
+    const expr = (v) => this.astExpression(v);
+    const stmt = (v) => this.astStatement(v);
+    const list = (fn) => (v) => this.astList(v, key, fn);
+    if (kind === "literal" && key === "type") {
+      if (!["Int", "Float", "String", "Bool"].some((t) => value === this.types[t])) {
+        throw new ClapError("Literal.type には標準プリミティブ型クラスが必要です");
+      }
+      return value.name;
+    }
+    if (kind === "literal" && key === "value") {
+      if (!["Int", "Float", "String", "Bool"].includes(fields.type) ||
+          value.parent !== this.types[fields.type]) {
+        throw new ClapError("Literal.value には " + fields.type + " の値が必要です");
+      }
+      return value.value;
+    }
+    const converters = {
+      name: { name: ident },
+      member: { object: expr, name: ident },
+      call: { target: expr, args: list(expr) },
+      operator: { name: ident, left: expr, right: expr },
+      block: { body: list(stmt) },
+      statement: { expression: expr },
+      field: { name: ident, expression: expr },
+      method: { name: ident, params: list(ident), body: list(stmt) },
+      class: {
+        name: ident,
+        base: (v) => v instanceof ClapClass && v.isA(this.types.Unit) ? null : expr(v),
+        body: list((v) => {
+          this.requireType(v, "Statement");
+          if (!["class", "method", "field"].includes(v.kind)) {
+            throw new ClapError("ClassDefinition.body は定義要素のみ指定できます");
+          }
+          return v;
+        })
+      }
+    };
+    const convert = converters[kind] && converters[kind][key];
+    if (!convert) throw new ClapError(kind + " に " + key + " はありません");
+    return convert(value);
+  }
+  checkLiteral(data) {
+    const t = data.type, v = data.value;
+    if (t === "Int" && Number.isSafeInteger(v)) return;
+    if (t === "Float" && typeof v === "number" && Number.isFinite(v)) return;
+    if (t === "String" && typeof v === "string") return;
+    if (t === "Bool" && typeof v === "boolean") return;
+    throw new ClapError("Literal の型と値が一致しません");
+  }
+  astWith(node, name, value, scope) {
+    this.requireType(node, "Node");
+    if (!node.data) throw new ClapError("Node.with の対象にはAST値が必要です");
+    if (!Object.hasOwn(node.data, name)) throw new ClapError(node.kind + " に " + name + " はありません");
+    const next = { ...node.data };
+    next[name] = this.astField(node.kind, name, value, next);
+    if (node.kind === "literal") this.checkLiteral(next);
+    // The new root inherits its original captured scope.
+    return this.constructAst(node.kind, next, node.lexicalScope || scope);
+  }
   createParser(source) {
     return new Parser(tokenize(source), (name) => this.operatorInfo(name),
       (kind, fields) => this.astNode(kind, fields));
@@ -534,10 +624,72 @@ class Interpreter {
       vm.requireType(args[0], "String");
       return vm.value("String", self.value + args[0].value);
     });
-    this.nativeMethod(this.types.Expression, "eval", (args, vm, self) => {
-      vm.arity(args, 0, "Expression.eval");
-      if (!self.ast || !self.lexicalScope) throw new ClapError("評価する式がありません");
-      return vm.evaluate(self.ast, self.lexicalScope);
+    this.nativeMethod(this.types.Node, "eval", (args, vm, self) => {
+      vm.arity(args, 0, "Node.eval");
+      if (!self.data || !self.lexicalScope) throw new ClapError("評価するASTがありません");
+      if (self.isA(vm.types.Expression)) return vm.evaluate(self, self.lexicalScope);
+      if (self.kind === "class" || self.kind === "statement") {
+        return vm.executeStatement(self, self.lexicalScope);
+      }
+      throw new ClapError(self.kind + " は単独では実行できません");
+    });
+    this.nativeMethod(this.types.Node, "with", (args, vm, self, scope) => {
+      vm.arity(args, 2, "Node.with");
+      return vm.astWith(self, vm.astIdentifier(args[0]), args[1], scope);
+    });
+    this.nativeMethod(this.types.Literal, "new", (args, vm, self, scope) => {
+      vm.arity(args, 1, "Literal.new");
+      const value = args[0];
+      const type = ["Int", "Float", "String", "Bool"].find((name) => value.parent === vm.types[name]);
+      if (!type) throw new ClapError("Literal.new には標準プリミティブ値が必要です");
+      const data = { type, value: value.value };
+      vm.checkLiteral(data);
+      return vm.constructAst("literal", data, scope);
+    });
+    const addConstructor = (type, kind, names) => {
+      this.nativeMethod(this.types[type], "new", (args, vm, self, scope) => {
+        vm.arity(args, names.length, type + ".new");
+        const data = {};
+        names.forEach((field, index) => {
+          data[field] = vm.astField(kind, field, args[index], data);
+        });
+        return vm.constructAst(kind, data, scope);
+      });
+    };
+    addConstructor("Reference", "name", ["name"]);
+    addConstructor("MemberAccess", "member", ["object", "name"]);
+    addConstructor("Call", "call", ["target", "args"]);
+    addConstructor("OperatorCall", "operator", ["name", "left", "right"]);
+    addConstructor("Block", "block", ["body"]);
+    addConstructor("Statement", "statement", ["expression"]);
+    addConstructor("FieldDefinition", "field", ["name", "expression"]);
+    addConstructor("MethodDefinition", "method", ["name", "params", "body"]);
+    this.nativeMethod(this.types.ClassDefinition, "new", (args, vm, self, scope) => {
+      if (args.length !== 2 && args.length !== 3) {
+        throw new ClapError("ClassDefinition.new は (name, body) または (name, base, body) です");
+      }
+      const data = { name: vm.astField("class", "name", args[0], {}) };
+      data.base = args.length === 3 ? vm.astField("class", "base", args[1], data) : null;
+      data.body = vm.astField("class", "body", args[args.length - 1], data);
+      return vm.constructAst("class", data, scope);
+    });
+    this.nativeMethod(this.types.Array, "of", (args, vm) => vm.array(args.slice()));
+    this.nativeMethod(this.types.Array, "append", (args, vm, self) => {
+      vm.arity(args, 1, "Array.append");
+      vm.requireType(self, "Array");
+      if (!Array.isArray(self.items)) throw new ClapError("Array値が必要です");
+      return vm.array([...self.items, args[0]]);
+    });
+    this.nativeMethod(this.types.Array, "with", (args, vm, self) => {
+      vm.arity(args, 2, "Array.with");
+      vm.requireType(self, "Array");
+      if (!Array.isArray(self.items)) throw new ClapError("Array値が必要です");
+      vm.requireType(args[0], "Int");
+      const index = args[0].value;
+      if (index < 0 || index >= self.items.length) throw new ClapError("Array.with: 添字が範囲外です");
+      const copy = self.items.slice();
+      copy[index] = args[1];
+      return vm.array(copy);
     });
     this.nativeMethod(this.types.Array, "at", (args, vm, self) => {
       vm.arity(args, 1, "Array.at");
