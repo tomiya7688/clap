@@ -50,6 +50,26 @@ Print(parsed.eval()) // 40
 
 `ast.left` / `ast.right` / `ast.args` などから構文木を再帰的に調べられます。詳しくは [ASTの例](examples/ast.clap) を参照してください。
 
+## ASTの生成・書き換え
+
+`Quote` と `Parse` に加えて、ASTクラスに `.new(...)` コンストラクタを用意しています。
+
+```clap
+Let(code, OperatorCall.new(
+    "Add",
+    Literal.new(1),
+    Literal.new(2)
+))
+Print(code.eval()) // 3
+
+// 元のコードを変えずに新しいASTを作る
+Let(changed, code.with("right", Literal.new(41)))
+Print(code.eval())    // 3
+Print(changed.eval()) // 42
+```
+
+`Array.of(...)`、`Array.with(index, value)`、`Array.append(value)` でASTの引数や文の配列も組み立てられます。動的に関数クラスを生成する例は [metaprogramming.clap](examples/metaprogramming.clap) を参照してください。
+
 ## ランタイム方針
 
 インタプリタは最小限の構文を読み取り、評価をクラスへ委譲します。ユーザー定義 `Function`・`Operator`・`Syntax` は共通の `process` メソッドを持ちます。初期版には処理系起動のためのブートストラップ処理が存在します。

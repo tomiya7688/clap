@@ -1,0 +1,25 @@
+// Build and rewrite executable Clap code with Clap's class objects.
+Let(original, Quote(1 Add 2))
+Let(changed, original.with("right", Literal.new(41)))
+Print(original.eval()) // 3
+Print(changed.eval())  // 42
+
+// A class-derived Syntax can build new code without evaluating its input.
+class TimesTen : Syntax {
+    process(expression) {
+        Return(OperatorCall.new("Mul", expression, Literal.new(10)))
+    }
+}
+
+Let(x, 4)
+Let(generated, TimesTen(x Add 1))
+Print(ClassOf(generated)) // <class OperatorCall>
+Print(generated.eval())   // 50
+
+// Define an actual Function class from AST classes at runtime.
+Let(multiplied, OperatorCall.new("Mul", Reference.new("n"), Reference.new("n")))
+Let(ret, Call.new(Reference.new("Return"), Array.of(multiplied)))
+Let(method, MethodDefinition.new("process", Array.of("n"), Array.of(Statement.new(ret))))
+Let(declaration, ClassDefinition.new("Square", Reference.new("Function"), Array.of(method)))
+declaration.eval()
+Print(Square(7)) // 49

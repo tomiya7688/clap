@@ -152,7 +152,62 @@ Print(call.args.at(0).left.eval()) // 10
 
 Syntax の引数や Quote / Parse が返す AST は **字句スコープを捕捉**するため、ブロックの外でも `.eval()` で元のスコープの変数を参照できる。現時点では AST は読み取り専用として公開し、構文木の書き換えや任意の新しい字句規則は未実装。
 
-## 7. クラス内クラス・変数・スコープ
+## 7. AST コンストラクタと書き換え
+
+ASTはクラス値なので、各AST型の `.new(...)` でコードを直接生成できる。これはAST型のメソッドであり、`new` を予約演算子にしていない。
+
+~~~clap
+Let(code, OperatorCall.new(
+    "Mul",
+    Reference.new("value"),
+    Literal.new(2)
+))
+
+Let(value, 21)
+Print(code.eval()) // 42
+~~~
+
+現時点で利用できるコンストラクタは以下。
+
+| ASTクラス | コンストラクタ |
+| --- | --- |
+| Literal | `Literal.new(value)` （Int/Float/String/Bool） |
+| Reference | `Reference.new(name)` |
+| MemberAccess | `MemberAccess.new(object, name)` |
+| Call | `Call.new(target, Array.of(args...))` |
+| OperatorCall | `OperatorCall.new(name, left, right)` |
+| Block | `Block.new(Array.of(statements...))` |
+| Statement | `Statement.new(expression)` |
+| FieldDefinition | `FieldDefinition.new(name, expression)` |
+| MethodDefinition | `MethodDefinition.new(name, Array.of(paramNames...), Array.of(statements...))` |
+| ClassDefinition | `ClassDefinition.new(name, Array.of(members...))` または `ClassDefinition.new(name, baseExpression, Array.of(members...))` |
+
+`ClassDefinition` や `Statement` を `.eval()` すると、捕捉したスコープにその文を実行する。 `FieldDefinition` と `MethodDefinition` は単独実行できずクラス本体に含める。
+
+すべてのAST値は `Node.with(field, replacement)` を継承する。`with` は元のASTを変更せず、指定されたフィールドだけを置き換えた **新しいクラス値** を返す。フィールドの型は検証され、`Literal.value` の値と型の不一致や、`OperatorCall.right` への非AST値の代入はエラーになる。
+
+~~~clap
+Let(original, Quote(1 Add 2))
+Let(changed, original.with("right", Literal.new(41)))
+Print(original.eval()) // 3
+Print(changed.eval())  // 42
+~~~
+
+Arrayの `Array.of(...)`、`.append(value)`、`.with(index, value)` も、新しいArrayを返し、元のArrayを変更しない。ASTの `args`、`body`、`params` の組み立てや書き換えに利用できる。
+
+~~~clap
+Let(call, Quote(Print(1)))
+Let(changed, call.with(
+    "args", call.args.with(0, Literal.new(5))
+))
+changed.eval() // 5
+~~~
+
+**スコープ規約：** `Quote`、`Parse`、各コンストラクタはASTルートに作成時のスコープを保持する。`Node.with` は元のルートのスコープを保持する。ネストしたASTは、実行時にルートから与えられたスコープで評価される（子ASTに別個に保存されたスコープを個別適用するわけではない）。生成した関数の引数は、関数呼び出しフレームから解決される。この振る舞いは衛生的マクロ（hygienic macro）の完全な実装ではない。
+
+構文木の構築と書き換えは可能になったが、ユーザーが独自の字句構文や記号をパーサーに動的登録する機能は、まだ未実装。
+
+## 8. クラス内クラス・変数・スコープ
 
 ~~~clap
 class Game {
@@ -165,7 +220,7 @@ Print(Game.Player.HP)
 
 ネストに構文上の深さ制限はない。Let(name, value) は現在の Scope に Variable クラスの束縛を作り、Set(name, value) は見つかった束縛を更新する。波括弧のブロックは子スコープで実行する。
 
-## 8. 現段階の制約
+## 9. 現段階の制約
 
 - ホスト側は JavaScript (Node.js)。**AST の各ノードは ClapClass** だが、トークンやパーサー/評価器のブートストラップ処理、ノードの非公開メタデータは JS で実装される。字句解析と `class` 宣言の起動処理には専用規則が残る。
 - Syntax 派生クラスによる遅延評価は可能。ただし任意の新しい字句記号や構文規則を登録する機能は未実装。
@@ -173,9 +228,9 @@ Print(Game.Player.HP)
 - 継承・メソッド・クラス内クラスは初期実装。インスタンス化、ミュータブルなクラスフィールド、パッケージ/モジュール、例外、非同期処理、最適化、完全な構文メタプログラミングは今後の課題。
 - Clap のコード自体はサンドボックスではない。信頼できないプログラムを安全に実行する用途には使わない。
 
-## 9. 次の目標
+## 10. 次の目標
 
-1. AST の構築・変換 API を追加し、ユーザー定義の構文マクロを強化する。
+1. ASTの再帰変換・マクロ展開APIを標準クラスとして提供し、スコープ衛生を検討する。
 2. Class 宣言を Class / Syntax に近づけてパーサーの特例を減らす。
 3. メソッドの束縛・属性変更・型変換・モジュール機構の仕様を固める。
 4. インタプリタ自身を Clap で記述できる範囲を拡大する。

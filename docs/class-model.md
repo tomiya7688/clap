@@ -65,4 +65,16 @@ Class の自己参照を含め、親チェーン探索には循環検知を使�
 - Array: AST の引数・文のリストなどを Clap クラスとして保持する。
 - Scope: 名前から Variable 束縛を引き、変数の値クラスを解決する。
 
-ブートストラップ実装はあくまで出発点。AST ノードはクラス化できたが、トークナイザーとパーサー本体、内部メタデータはまだ JavaScript 実装。次に AST の書き換え・Parser の公開を進める。
+## クラスからクラスを組み立てる
+
+ASTクラス型（Literal、Reference、OperatorCall、Call、Block、Statement、ClassDefinitionなど）の `new` メソッドが新たなAST値クラスを返す。
+
+- `Literal.new(value)` は実行時の Int/Float/String/Bool 値から Literal を作る。
+- `OperatorCall.new("Add", left, right)` は演算子のクラス名を使って中置式を作る。
+- `Call.new(target, Array.of(...))` は実行可能な呼び出しを組み立てる。
+- `Node.with("right", replacement)` は元のノードを変更せず、一部を書き換えた新しいノードクラスを返す。
+- `Array.of(...)`、`Array.with(index, item)`、`Array.append(item)` はASTフィールド用のクラス配列を不変更新する。
+
+AST の `.eval()` は評価用スコープを持ったクラス値で使用できる。ノードの型・フィールド構造は各コンストラクタで検証する。
+
+ブートストラップ実装はあくまで出発点。ASTノードの生成・書き換えもクラスを介して実装できたが、トークナイザーとパーサー本体、内部メタデータはまだ JavaScript 実装。次は再帰AST変換・スコープ衛生・Parserの言語側公開を進める。
